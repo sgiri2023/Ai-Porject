@@ -1,0 +1,1084 @@
+
+---
+
+# Master prompt for building the project
+
+You can give the following prompt to a coding agent such as Cursor, Claude Code, or another coding model:
+
+```text
+You are a senior full-stack AI engineer.
+
+Build a production-quality MVP called:
+
+"AI Book Universe"
+
+The application is an AI-powered book discovery and knowledge platform.
+
+The core idea is:
+
+Users upload books.
+Each book is processed into pages, chapters and chunks.
+Chunks are embedded and stored in PostgreSQL + pgvector.
+A book-level semantic embedding is generated.
+The book embedding is reduced to XYZ coordinates using UMAP.
+Three.js renders every book as a point in a 3D semantic universe.
+
+When a user clicks a point, they should see:
+- Book cover
+- Title
+- Author
+- Description
+- AI-generated short summary
+- Detailed summary
+- Topics
+- Audience
+- Chapter list
+- Similar books
+- Ask AI button
+- Open book button
+
+The user can ask questions about the selected book.
+The RAG system retrieves relevant chunks from that specific book,
+passes them to the LLM, and returns an answer with page/chapter citations.
+
+Use LangChain for LLM/RAG functionality.
+Use LangGraph for the RAG workflow.
+Use Langfuse for LLM/RAG observability.
+
+==================================================
+TECH STACK
+==================================================
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- Material UI
+- Three.js
+- React Three Fiber
+- @react-three/drei
+- Axios
+- React Router
+
+Backend:
+- Node.js
+- TypeScript
+- Express
+- LangChain.js
+- LangGraph.js
+- Langfuse
+
+Database:
+- PostgreSQL
+- pgvector
+
+AI:
+- Configurable LLM provider
+- Configurable embedding provider
+- Default embedding dimension should support 384-dimensional embeddings
+
+Visualization:
+- Three.js
+- React Three Fiber
+- UMAP-generated 3D coordinates
+
+Infrastructure:
+- Docker
+- Docker Compose
+
+==================================================
+IMPORTANT ARCHITECTURE
+==================================================
+
+Use a monorepo:
+
+ai-book-universe/
+
+frontend/
+backend/
+docker/
+README.md
+docker-compose.yml
+.env.example
+
+Do not mix frontend and backend responsibilities.
+
+Frontend must never contain:
+- database credentials
+- LLM API keys
+- Langfuse secret key
+
+Backend owns:
+- database
+- file processing
+- embeddings
+- LLM
+- LangChain
+- LangGraph
+- Langfuse
+
+==================================================
+DATABASE
+==================================================
+
+Use PostgreSQL with pgvector.
+
+Enable:
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+Create these tables:
+
+books
+
+Fields:
+
+id UUID PRIMARY KEY
+title TEXT NOT NULL
+author TEXT
+description TEXT
+isbn TEXT
+language TEXT
+publisher TEXT
+publication_year INT
+page_count INT
+file_name TEXT
+file_url TEXT
+cover_url TEXT
+mime_type TEXT
+file_size BIGINT
+status TEXT
+processing_error TEXT
+book_embedding VECTOR(384)
+position_x DOUBLE PRECISION
+position_y DOUBLE PRECISION
+position_z DOUBLE PRECISION
+created_at TIMESTAMP
+updated_at TIMESTAMP
+
+book_chapters
+
+id
+book_id
+chapter_number
+title
+start_page
+end_page
+summary
+chapter_embedding VECTOR(384)
+created_at
+
+book_pages
+
+id
+book_id
+chapter_id
+page_number
+text
+created_at
+
+book_chunks
+
+id
+book_id
+chapter_id
+page_start
+page_end
+chunk_number
+content
+token_count
+embedding VECTOR(384)
+metadata JSONB
+created_at
+
+book_summaries
+
+id
+book_id
+short_summary
+detailed_summary
+audience
+themes JSONB
+key_takeaways JSONB
+generated_by
+created_at
+updated_at
+
+conversations
+
+id
+user_id
+book_id
+title
+created_at
+updated_at
+
+conversation_messages
+
+id
+conversation_id
+role
+content
+created_at
+
+message_sources
+
+id
+message_id
+chunk_id
+similarity
+rank
+created_at
+
+book_processing_jobs
+
+id
+book_id
+job_type
+status
+progress
+error_message
+started_at
+completed_at
+created_at
+
+Use foreign keys and cascading deletes correctly.
+
+Create pgvector HNSW indexes for:
+- book_chunks.embedding
+- books.book_embedding
+
+Use cosine similarity.
+
+==================================================
+BOOK INGESTION
+==================================================
+
+Implement this pipeline:
+
+PDF upload
+    ↓
+Create books record
+    ↓
+Extract PDF text page by page
+    ↓
+Preserve original page numbers
+    ↓
+Detect chapters where possible
+    ↓
+Create chunks
+    ↓
+Generate chunk embeddings
+    ↓
+Store chunks + embeddings
+    ↓
+Generate chapter summaries
+    ↓
+Generate book summary
+    ↓
+Generate book-level embedding
+    ↓
+Generate UMAP XYZ
+    ↓
+Store XYZ
+    ↓
+Mark book COMPLETED
+
+The upload API must return immediately with:
+
+bookId
+status = PROCESSING
+
+Processing should happen asynchronously.
+
+Do not block the HTTP request while processing a large book.
+
+Implement a worker/service abstraction so that the processing pipeline can later be moved to Redis/BullMQ/Azure Queue without redesigning the application.
+
+==================================================
+CHUNKING
+==================================================
+
+Implement a sensible recursive text splitter.
+
+Chunk size should be configurable.
+
+Use overlap.
+
+Preserve:
+- book_id
+- chapter_id
+- page_start
+- page_end
+- chunk_number
+
+Do not lose page information.
+
+Chunks may span multiple pages.
+
+==================================================
+EMBEDDINGS
+==================================================
+
+Generate embeddings for every chunk.
+
+Store embeddings in:
+
+book_chunks.embedding
+
+Generate a book-level embedding separately.
+
+Do NOT send the entire raw book into a single LLM prompt.
+
+Use hierarchical aggregation.
+
+Preferred:
+
+chunks
+ ↓
+chapter representation
+ ↓
+book representation
+
+A simple initial implementation can use normalized mean pooling.
+
+Make the aggregation logic isolated so it can later be replaced by weighted pooling.
+
+==================================================
+BOOK SUMMARY
+==================================================
+
+Use hierarchical summarization.
+
+Chunk/section summaries
+        ↓
+Chapter summaries
+        ↓
+Book summary
+
+Generate:
+
+1. short_summary
+2. detailed_summary
+3. audience
+4. themes
+5. key_takeaways
+
+Store the result in book_summaries.
+
+Do not regenerate the summary every time the user clicks a book.
+
+Generate it during ingestion.
+
+==================================================
+3D SEMANTIC SPACE
+==================================================
+
+The full book content contributes to the book-level embedding.
+
+Use the book-level embedding to calculate 3D coordinates.
+
+Use UMAP.
+
+Input:
+
+N books × embedding dimensions
+
+Output:
+
+N books × 3 dimensions
+
+Store:
+
+position_x
+position_y
+position_z
+
+IMPORTANT:
+
+XYZ axes do not have predefined human meanings.
+
+Do not label:
+X = AI
+Y = Programming
+Z = Mathematics
+
+Instead, explain that the coordinates represent a reduced semantic space.
+
+Similar books should generally appear near each other.
+
+Implement a Universe service:
+
+getAllBookCoordinates()
+
+Return:
+
+id
+title
+author
+cover_url
+x
+y
+z
+
+For a stable universe, fit UMAP on the existing collection and use transform for new books when possible.
+
+Periodically rebuild the projection when the library changes significantly.
+
+==================================================
+THREE.JS
+==================================================
+
+Use:
+
+React Three Fiber
+Three.js
+Drei
+
+Create:
+
+BookUniverse
+BookPoint
+CameraController
+UniverseControls
+
+Each book is represented by a small sphere.
+
+Example concept:
+
+<mesh position={[x, y, z]}>
+
+Add:
+- orbit controls
+- zoom
+- pan
+- hover
+- click
+- selected state
+- smooth camera movement
+- labels/tooltips
+- nearby book highlighting
+
+When hovering:
+show a small tooltip with:
+- title
+- author
+- short summary
+
+When clicking:
+select the book.
+
+Selected point should:
+- become larger
+- visually highlight
+- optionally animate
+
+Then open a MUI BookDetailsPanel.
+
+==================================================
+BOOK DETAILS PANEL
+==================================================
+
+Use Material UI.
+
+Show:
+
+Book cover
+Title
+Author
+Description
+Short summary
+Topics
+Audience
+Page count
+Chapter count
+
+Buttons:
+
+Ask AI
+Open Book
+Explore Chapters
+Find Similar Books
+
+Also show nearby/similar books.
+
+==================================================
+SIMILAR BOOKS
+==================================================
+
+Use book_embedding and pgvector.
+
+When a book is selected:
+
+retrieve nearest books using cosine similarity.
+
+Do not use XYZ Euclidean distance as the authoritative similarity metric.
+
+Use vector similarity.
+
+Return:
+- book
+- similarity score
+
+==================================================
+RAG
+==================================================
+
+Implement book-specific RAG.
+
+User selects:
+
+Book A
+
+Then asks:
+
+"What does the author say about backpropagation?"
+
+RAG must filter retrieval by:
+
+book_id = selectedBookId
+
+Pipeline:
+
+question
+ ↓
+query embedding
+ ↓
+vector search
+ ↓
+filter book_id
+ ↓
+top K chunks
+ ↓
+optional reranking
+ ↓
+LangChain prompt
+ ↓
+LLM
+ ↓
+answer
+ ↓
+sources
+
+Sources must contain:
+- chapter
+- page_start
+- page_end
+- chunk_id
+- similarity
+
+The LLM should be instructed:
+
+Answer using only the retrieved book context.
+
+If the answer is not supported by the retrieved context, say:
+
+"I don't know based on the provided book content."
+
+Do not hallucinate page numbers.
+
+==================================================
+LANGGRAPH
+==================================================
+
+Implement the RAG workflow using LangGraph.
+
+Graph:
+
+START
+ ↓
+AnalyzeQuestion
+ ↓
+DetermineScope
+ ↓
+Retrieve
+ ↓
+Rerank
+ ↓
+GenerateAnswer
+ ↓
+ValidateAnswer
+ ↓
+END
+
+For MVP, keep nodes simple and deterministic.
+
+Create clear TypeScript types for graph state.
+
+Do not create an unnecessarily complex multi-agent architecture.
+
+==================================================
+LANGFUSE
+==================================================
+
+Integrate Langfuse.
+
+Trace:
+- user question
+- retrieval
+- retrieved chunks
+- similarity scores
+- LLM call
+- final answer
+- latency
+- token usage if available
+- errors
+
+Create meaningful trace names.
+
+Do not expose Langfuse secret credentials to frontend.
+
+==================================================
+API
+==================================================
+
+Implement:
+
+POST /api/books/upload
+
+GET /api/books
+
+GET /api/books/:id
+
+GET /api/books/:id/status
+
+GET /api/books/:id/similar
+
+GET /api/books/:id/chapters
+
+GET /api/universe/books
+
+POST /api/books/:id/chat
+
+POST /api/search
+
+GET /api/conversations/:id
+
+GET /api/conversations/:id/messages
+
+Use proper HTTP status codes.
+
+Validate request bodies.
+
+Handle errors consistently.
+
+==================================================
+FRONTEND ROUTES
+==================================================
+
+/
+
+Home page
+
+/universe
+
+3D book universe
+
+/books/:id
+
+Book details page
+
+/admin
+
+Book upload/admin page
+
+==================================================
+HOME PAGE
+==================================================
+
+Create a polished Material UI landing page.
+
+Show:
+
+AI Book Universe
+
+"Explore books as a living 3D knowledge space."
+
+Buttons:
+
+Explore Universe
+Upload Book
+
+Search bar:
+
+"Search books, topics or ideas..."
+
+==================================================
+UNIVERSE PAGE
+==================================================
+
+Main 3D experience.
+
+Layout:
+
+Top:
+search bar
+
+Left:
+filters
+
+Center:
+Three.js universe
+
+Right:
+selected book panel
+
+Bottom:
+optional navigation/help
+
+Filters:
+- category
+- author
+- language
+- status
+
+==================================================
+BOOK DETAILS
+==================================================
+
+Create a polished page.
+
+Sections:
+
+Cover
+Title
+Author
+Summary
+Topics
+Key takeaways
+Chapters
+Similar books
+AI chat
+
+==================================================
+CHAT UI
+==================================================
+
+Create a clean ChatGPT-like interface using MUI.
+
+Show:
+- user messages
+- assistant messages
+- loading state
+- error state
+- source citations
+
+Each source should be clickable.
+
+Example:
+
+Sources:
+
+Chapter 8
+Pages 231-236
+
+Clicking the source should call a PDF viewer/open-page mechanism.
+
+==================================================
+PDF VIEWER
+==================================================
+
+Create an abstraction for opening the original book.
+
+When a source contains:
+
+page = 327
+
+the frontend should open the book at page 327 if the PDF viewer supports it.
+
+Do not invent PDF page offsets.
+
+Preserve the original page number during extraction.
+
+==================================================
+ERROR HANDLING
+==================================================
+
+Implement centralized backend error handling.
+
+Handle:
+- invalid file
+- unsupported PDF
+- empty PDF
+- extraction failure
+- embedding failure
+- LLM failure
+- database failure
+- vector search failure
+- summary failure
+
+Book processing should become FAILED with a useful error message.
+
+The frontend should show processing status.
+
+==================================================
+SECURITY
+==================================================
+
+Implement:
+- file size limits
+- MIME validation
+- extension validation
+- safe filenames
+- input validation
+- rate limiting
+- CORS
+- environment variable secrets
+
+Never expose:
+DATABASE_URL
+LLM API keys
+LANGFUSE_SECRET_KEY
+
+==================================================
+LOGGING
+==================================================
+
+Use structured backend logging.
+
+Every processing stage should log:
+- book_id
+- job_id
+- stage
+- duration
+- success/failure
+
+==================================================
+TESTING
+==================================================
+
+Create tests for:
+
+PDF extraction
+Chunking
+Embedding service
+Book aggregation
+Vector search
+Summary generation
+UMAP positioning
+RAG retrieval
+API endpoints
+
+Test that:
+- chunks preserve page numbers
+- RAG filters by book_id
+- sources map to correct chunks
+- XYZ values are stored
+- selected book loads correctly
+
+==================================================
+DOCKER
+==================================================
+
+Create docker-compose.yml containing:
+
+postgres with pgvector
+
+Optional:
+redis
+
+Use persistent volumes.
+
+Example conceptual setup:
+
+postgres:
+  image: pgvector/pgvector:pg16
+
+Do not hard-code credentials.
+
+Use environment variables.
+
+==================================================
+ENVIRONMENT
+==================================================
+
+Create .env.example:
+
+PORT=5000
+
+DATABASE_URL=
+
+LLM_API_KEY=
+LLM_MODEL=
+
+EMBEDDING_MODEL=
+
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_HOST=
+
+UPLOAD_DIR=
+
+FRONTEND_URL=http://localhost:5173
+
+==================================================
+CODE QUALITY
+==================================================
+
+Use:
+- TypeScript strict mode
+- clear interfaces
+- modular services
+- dependency injection where useful
+- async/await
+- centralized error handling
+- environment configuration
+- no hard-coded secrets
+- no duplicated business logic
+
+Do not put everything into server.ts.
+
+Keep:
+controllers
+services
+repositories
+AI logic
+database
+workers
+
+separate.
+
+==================================================
+IMPORTANT IMPLEMENTATION RULES
+==================================================
+
+1. Start with a working MVP.
+
+2. Do not over-engineer.
+
+3. Do not implement authentication initially unless needed.
+
+4. Keep the LLM provider configurable.
+
+5. Keep the embedding provider configurable.
+
+6. Do not make XYZ coordinates manually.
+
+7. Do not use the XYZ coordinates for RAG.
+
+8. Do not use book summaries as a replacement for source chunks.
+
+9. RAG must use actual chunks from the uploaded book.
+
+10. Preserve page numbers.
+
+11. Similar books should use embeddings.
+
+12. Three.js should only visualize the semantic coordinates.
+
+13. LangGraph should orchestrate the RAG flow.
+
+14. Langfuse should trace AI operations.
+
+15. MUI should be used for application UI.
+
+==================================================
+DELIVERABLES
+==================================================
+
+Generate the complete working project.
+
+Provide:
+
+1. Folder structure
+2. package.json files
+3. Docker Compose
+4. PostgreSQL schema
+5. Backend TypeScript code
+6. Frontend TypeScript/React code
+7. Three.js/React Three Fiber implementation
+8. MUI components
+9. PDF processing
+10. Chunking
+11. Embeddings
+12. Book summarization
+13. UMAP positioning
+14. pgvector search
+15. LangChain RAG
+16. LangGraph workflow
+17. Langfuse integration
+18. Chat interface
+19. Book details interface
+20. 3D universe
+21. API routes
+22. Environment configuration
+23. Tests
+24. README
+25. Setup instructions
+
+The project must be runnable locally with:
+
+docker compose up -d
+
+then:
+
+cd backend
+npm install
+npm run dev
+
+and:
+
+cd frontend
+npm install
+npm run dev
+
+==================================================
+FIRST IMPLEMENTATION TARGET
+==================================================
+
+Build the MVP in this order:
+
+PHASE 1:
+PostgreSQL + pgvector
+Book schema
+PDF upload
+Page extraction
+Chunking
+
+PHASE 2:
+Embeddings
+Vector search
+Book summary
+Chapter summary
+
+PHASE 3:
+Book-level embedding
+UMAP
+XYZ coordinates
+
+PHASE 4:
+React + MUI
+Three.js universe
+Book points
+Click interaction
+
+PHASE 5:
+LangChain RAG
+Book-specific chat
+Sources/page citations
+
+PHASE 6:
+LangGraph
+Langfuse
+
+PHASE 7:
+Polish
+Loading states
+Errors
+Animations
+Search
+Similar books
+UX improvements
+
+At every phase, keep the application runnable.
+
+Do not generate fake implementations for core functionality.
+Use real PostgreSQL queries, real pgvector similarity search,
+real PDF extraction, real embeddings, real LLM calls,
+real UMAP positioning and real Three.js rendering.
+
+If an external provider requires an API key, make it configurable
+through environment variables and provide a clear setup instruction.
+
+Begin by creating the complete project structure and database schema,
+then implement the backend ingestion pipeline, then the frontend.
